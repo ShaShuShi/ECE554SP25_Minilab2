@@ -15,7 +15,7 @@ module image_processing_tb;
     wire [11:0] oGrey_B;
     wire oDVAL;
     
-    // Instantiate the DUT (Device Under Test)
+    // Instantiate the DUT
     image_processing dut (
         .oGrey_R(oGrey_R),
         .oGrey_G(oGrey_G),
@@ -31,7 +31,7 @@ module image_processing_tb;
     );
     
     // Clock generation
-    always #5 iCLK = ~iCLK; // 10ns period (100MHz clock)
+    always #5 iCLK = ~iCLK;
     
     // Testbench process
     initial begin
