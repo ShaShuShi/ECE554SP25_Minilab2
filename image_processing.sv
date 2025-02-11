@@ -4,7 +4,7 @@
 `timescale 1ns/1ps
 
 //=========================================================================
-// Module: image processing
+// Module: image_processing
 // Description:
 //   Accepts a pixel stream (with associated X/Y counters and data-valid)
 //   converts the RGB pixel into a gray value, delays the stream through
@@ -114,20 +114,14 @@ module image_processing(
     );
     
     // -------------------------------------------------------------------
-    // Convolution Filter Module
-    // This module is combinational and implements a 3x3 convolution.
-    // The parameter iSW selects horizontal (when high) versus vertical (when low)
-    // filtering (i.e. different coefficient sets).
+    // Convolution Filter Module Instance
+    // The parameters below form the 3x3 window as follows:
+    //   X_p0 = cDATAdd_2, X_p1 = cDATAd_2, X_p2 = cDATA_2,
+    //   X_p3 = cDATAdd_1, X_p4 = cDATAd_1, X_p5 = cDATA_1,
+    //   X_p6 = cDATAdd_0, X_p7 = cDATAd_0, X_p8 = cDATA_0.
     Convolution_Filter conv_filter (
         .clk(iCLK),
         .isHorz(iSW),
-        // X_p0 = top-left, X_p1 = top-center, X_p2 = top-right,
-        // X_p3 = middle-left, X_p4 = center,    X_p5 = middle-right,
-        // X_p6 = bottom-left, X_p7 = bottom-center, X_p8 = bottom-right.
-        // In this example the delays from the line buffers are arranged as:
-        //   X_p0 = cDATAdd_2, X_p1 = cDATAd_2, X_p2 = cDATA_2,
-        //   X_p3 = cDATAdd_1, X_p4 = cDATAd_1, X_p5 = cDATA_1,
-        //   X_p6 = cDATAdd_0, X_p7 = cDATAd_0, X_p8 = cDATA_0.
         .X_p0(cDATAdd_2),
         .X_p1(cDATAd_2),
         .X_p2(cDATA_2),
@@ -208,49 +202,69 @@ module image_processing(
 endmodule
 
 //=========================================================================
-// Module: Convolution_Filter
+// Modified Module: Convolution_Filter
 // Description:
-//   A combinational 3x3 convolution filter. The 9 inputs represent the
-//   pixels of a 3x3 window (ordered as follows):
+//   This is a combinational 3x3 convolution filter. The nine inputs represent
+//   the pixels of a 3x3 window arranged as follows:
 //
-//     X_p0   X_p1   X_p2
-//     X_p3   X_p4   X_p5
-//     X_p6   X_p7   X_p8
+//         X_p0      X_p1      X_p2
+//         X_p3      X_p4      X_p5
+//         X_p6      X_p7      X_p8
 //
-//   The parameter isHorz selects between two sets of convolution
-//   coefficients (for example, for horizontal vs. vertical edge detection).
+//   The filtering direction (horizontal vs. vertical) is chosen by the 
+//   'isHorz' signal. Internally the convolution kernel coefficients are 
+//   defined with a spatially intuitive ordering (top-left, top-center, etc.).
+//   The final result is computed by multiplying each window pixel by its
+//   corresponding coefficient and summing the products.
 //=========================================================================
+
 module Convolution_Filter (
     input                  clk,
     input                  isHorz,
-    input  signed [11:0]   X_p0,  // Top-left
-    input  signed [11:0]   X_p1,  // Top-center
-    input  signed [11:0]   X_p2,  // Top-right
-    input  signed [11:0]   X_p3,  // Middle-left
-    input  signed [11:0]   X_p4,  // Center
-    input  signed [11:0]   X_p5,  // Middle-right
-    input  signed [11:0]   X_p6,  // Bottom-left
-    input  signed [11:0]   X_p7,  // Bottom-center
-    input  signed [11:0]   X_p8,  // Bottom-right
+    input  signed [11:0]   X_p0,  // Top-left pixel
+    input  signed [11:0]   X_p1,  // Top-center pixel
+    input  signed [11:0]   X_p2,  // Top-right pixel
+    input  signed [11:0]   X_p3,  // Middle-left pixel
+    input  signed [11:0]   X_p4,  // Center pixel
+    input  signed [11:0]   X_p5,  // Middle-right pixel
+    input  signed [11:0]   X_p6,  // Bottom-left pixel
+    input  signed [11:0]   X_p7,  // Bottom-center pixel
+    input  signed [11:0]   X_p8,  // Bottom-right pixel
     output signed [11:0]   y
 );
 
-    // Convolution kernel coefficients based on edge direction
-    wire signed [11:0] COEFF [8:0];
+    // Define the kernel coefficients arranged as:
+    //   [ k_tl   k_tc   k_tr ]
+    //   [ k_ml   k_mc   k_mr ]
+    //   [ k_bl   k_bc   k_br ]
+    wire signed [11:0] k_tl, k_tc, k_tr;
+    wire signed [11:0] k_ml, k_mc, k_mr;
+    wire signed [11:0] k_bl, k_bc, k_br;
 
-    assign COEFF[0] = -12'd1;
-    assign COEFF[1] = isHorz ? -12'd2 :  12'd0;
-    assign COEFF[2] = isHorz ? -12'd1 :  12'd1;
-    assign COEFF[3] = isHorz ?  12'd0 : -12'd2;
-    assign COEFF[4] =  12'd0;
-    assign COEFF[5] = isHorz ?  12'd0 :  12'd2;
-    assign COEFF[6] =  12'd1;
-    assign COEFF[7] = isHorz ?  12'd2 :  12'd0;
-    assign COEFF[8] =  12'd1;
+    // Set coefficients based on the filter direction.
+    // For horizontal filtering (isHorz == 1):
+    //   k_tl =  1,  k_tc =  2,  k_tr =  1,
+    //   k_ml =  0,  k_mc =  0,  k_mr =  0,
+    //   k_bl = -1,  k_bc = -2,  k_br = -1.
+    //
+    // For vertical filtering (isHorz == 0):
+    //   k_tl =  1,  k_tc =  0,  k_tr =  1,
+    //   k_ml =  2,  k_mc =  0,  k_mr = -2,
+    //   k_bl =  1,  k_bc =  0,  k_br = -1.
+    assign k_tl =  12'd1;
+    assign k_tc =  isHorz ? 12'd2 : 12'd0;
+    assign k_tr =  12'd1;
+    assign k_ml =  isHorz ? 12'd0 : 12'd2;
+    assign k_mc =  12'd0;
+    assign k_mr =  isHorz ? 12'd0 : -12'd2;
+    assign k_bl =  isHorz ? -12'd1 : 12'd1;
+    assign k_bc =  isHorz ? -12'd2 : 12'd0;
+    assign k_br = -12'd1;
 
-    // Compute convolution using multiply-accumulate
-    assign y = (X_p0 * COEFF[8]) + (X_p1 * COEFF[7]) + (X_p2 * COEFF[6]) +
-               (X_p3 * COEFF[5]) + (X_p4 * COEFF[4]) + (X_p5 * COEFF[3]) +
-               (X_p6 * COEFF[2]) + (X_p7 * COEFF[1]) + (X_p8 * COEFF[0]);
+    // Compute the convolution sum by multiplying each input pixel with its
+    // corresponding coefficient and summing the results.
+    assign y = (X_p0 * k_tl) + (X_p1 * k_tc) + (X_p2 * k_tr) +
+               (X_p3 * k_ml) + (X_p4 * k_mc) + (X_p5 * k_mr) +
+               (X_p6 * k_bl) + (X_p7 * k_bc) + (X_p8 * k_br);
 
 endmodule
